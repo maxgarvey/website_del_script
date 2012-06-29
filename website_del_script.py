@@ -5,6 +5,7 @@ import argparse
 import psuldap
 import socket
 import subprocess
+import os
 
 #this global should be the location of the local copy of the puppet dir
 __puppet_dir__ = '/home/maxgarvey/mint_stuff'
@@ -20,7 +21,7 @@ def get_website( website_input = '' ):
     string format... that way, when you want python structures, you can use 
     get_website_py but otherwise, you can just get it as a string'''
     #this part does all of the work. the rest just formats it.
-    website, dns, vhost, uid = get_website_py(website_input)
+    website, dns, vhost, uid, google_acct = get_website_py(website_input)
     #split up the dns entry, formatting for output
     output_string = 'website: ' + website + '\n' + 'dns: \n'
     for line in dns:
@@ -35,7 +36,7 @@ def get_website( website_input = '' ):
     if len(vhost) == 0:
         output_string += '\tno vhosts.\n'
     output_string += 'uid: \n\t' + uid + '\n\n'
-
+    output_string += google_acct
     return output_string
 
 def strip_http(website_http):
@@ -163,17 +164,41 @@ def get_website_py( website_input = '' ):
     file_lines = find_lines(website, __puppet_dir__)
     vhost_lines = process_lines(file_lines, whitelist_lines, __puppet_dir__)
 
-    uid, _ = ldap_lookup( website )
+    uid, _ = ldap_lookup(website)
     if uid == '':
         uid = 'no uid.'
 
-    return website, dns_lines, vhost_lines, uid
+    if uid != 'no uid.':
+        #got to trim the bracket, and quote off both sides
+        uid = uid[2:-2]
+        google_acct = gam_lookup(uid)
+    else:
+        google_acct = 'no ldap uid found to check for google account.'
+
+    return website, dns_lines, vhost_lines, uid, google_acct
+
+def gam_lookup(ldap_uid):
+    '''this is a helper method for looking up a google account for the website
+        and returning it if it exists.'''
+    with TemporaryFile() as temp:
+        with TemporaryFile() as temperr:
+            subprocess.call(['python', 'gam.py', 'info', 'user', ldap_uid], stdout=temp, stderr=temperr)
+            temp.seek(0)
+            gam_output = temp.read()
+
+    if gam_output != None and gam_output != '':
+        google_out_string = 'google account: {0}'.format(
+            gam_output.split('\n')[0].split(': ')[1])
+    else:
+        google_out_string = 'no google account found for: user={0}'.format(
+            ldap_uid)
+    return google_out_string
 
 #this will perform the function on a python list of URLs
 def get_website_list( website_list ):
     '''looks up each URL from a list of urls.'''
     out_file = open( 'outfile.txt', 'w' )
-    websites_str = '' 
+    websites_str = ''
 
     for website in website_list:
         if website != '':
