@@ -19,18 +19,23 @@ def get_website( website_input = '' ):
     '''this method puts the output of getting the website's information into a 
     string format... that way, when you want python structures, you can use 
     get_website_py but otherwise, you can just get it as a string'''
-    website, dns, vhost, uid = get_website_py( website_input )
-    output_string = 'website: ' + website + '\n' + 'dns: \n' 
+    #this part does all of the work. the rest just formats it.
+    website, dns, vhost, uid = get_website_py(website_input)
+    #split up the dns entry, formatting for output
+    output_string = 'website: ' + website + '\n' + 'dns: \n'
     for line in dns:
-        if not ( line.isspace() or line == '' ):
+        if not (line.isspace() or line == ''):
             output_string += line + '\n'
+    #add vhost stuff to output
     output_string += 'vhosts: \n'
     for line in vhost:
-        if not ( line.isspace() or line == '' ):
+        if not (line.isspace() or line == ''):
             output_string += line + '\n'
+    #catch the case where there's no vhosts
     if len(vhost) == 0:
         output_string += '\tno vhosts.\n'
     output_string += 'uid: \n\t' + uid + '\n\n'
+
     return output_string
 
 def strip_http(website_http):
@@ -82,9 +87,9 @@ def find_lines(website, dns_dir, my_type='dns'):
         try:
             subprocess.call( ['grep', '-rn', website, dns_dir], 
                 stdout=temp_file, stderr=temp_file )
-        except:
-            print '\nerror occurred during grepping '+my_type+' directory: ' + \
-                str( exc_info()[1] )
+        except IOError, err:
+            print '\nerror occurred during grepping {0} directory: {1}'.format(
+                my_type,err)
 
         temp_file.seek(0)
         file_string = temp_file.read()
@@ -93,40 +98,11 @@ def find_lines(website, dns_dir, my_type='dns'):
     return file_lines
 
 def process_lines(file_lines, whitelist_lines, start_dir):
-    keeper_lines = []
-    current_file = ''
-    for line in file_lines:
-        #if the line isn't relevant, ignore it.
-        if line.endswith('No such file or directory') or ( len(line) == 0 ):
-            pass
-        else:
-            #otherwise, skip past the part of the path that we know.
-            if line.startswith(start_dir):
-                line = line[(len(start_dir)):]
-            whitelisted = False
-            #compare with each element from whitelist, if the path starts with
-            #a whitelisted prefix, then ignore it.
-            for prefix in whitelist_lines:
-                if not (prefix.isspace() or prefix == ''):
-                    if line.startswith(prefix):
-                        whitelisted = True
-            if whitelisted == True:
-                pass
-            #if not whitelisted, add the filename and the relevant file contents
-            #properly tabbed for easy reading.
-            else:
-                if current_file != line[:(line.index(':'))]:
-                    current_file = line[:(line.index(':'))]
-                    keeper_lines.append( ('\t' + current_file + ':') )
-                keeper_lines.append( '\t\tline ' + str(
-                    line[(line.index(':')+1):line.index(':')+1+\
-                    line[(line.index(':')+1):].index(':') ])
-                    + ': ' + str( line[(line.rindex(':')+1):] ) )
-    return keeper_lines
-
-def process_lines_debug(file_lines, whitelist_lines, start_dir):
-    keeper_lines = []
-    current_file = ''
+    '''this method is a helper for figuring out which lines in our results are
+    worthwhile and formatting them a little bit.'''
+    keeper_lines = [] #the lines we will be keeping
+    current_file = '' #the file being grepped (since there are usually multiple
+                      #relevant lines per file).
     for line in file_lines:
         #if the line isn't relevant, ignore it.
         if line.endswith('No such file or directory') or ( len(line) == 0 ):
@@ -185,10 +161,9 @@ def get_website_py( website_input = '' ):
     #this part greps the puppet directory structure for vhosts
     whitelist_lines = read_whitelist(__puppet_whitelist_addr__)
     file_lines = find_lines(website, __puppet_dir__)
-    vhost_lines = process_lines_debug(file_lines,
-        whitelist_lines, __puppet_dir__)
+    vhost_lines = process_lines(file_lines, whitelist_lines, __puppet_dir__)
 
-    uid, results = ldap_lookup( website )
+    uid, _ = ldap_lookup( website )
     if uid == '':
         uid = 'no uid.'
 
@@ -196,6 +171,7 @@ def get_website_py( website_input = '' ):
 
 #this will perform the function on a python list of URLs
 def get_website_list( website_list ):
+    '''looks up each URL from a list of urls.'''
     out_file = open( 'outfile.txt', 'w' )
     websites_str = '' 
 
@@ -205,12 +181,12 @@ def get_website_list( website_list ):
             websites_str += website_str
 
     out_file.close()
-    out_file = open( 'outfile.txt', 'r' )
-    filestring = out_file.read()
     return websites_str
 
 #this will work from a file with a URL on each line
 def get_websites_from_file( input_file ):
+    '''this method takes a file location as a string and reads it in, splitting
+        on newlines and putting each URL through the lookup.'''
     with open( input_file, 'r' ) as in_file:
         filestring = in_file.read()
         my_list = filestring.split('\n')
@@ -224,30 +200,45 @@ def file_to_file( input_file, output_file ):
     with open( output_file, 'w' ) as output_file:
         output_file.write( output )
 
+def ldap_connect():
+    '''a helper method for connecting to ldap'''
+    try:
+        ldap_obj = psuldap.psuldap()
+        ldap_obj.connect(ldapurl='ldap://ldap.oit.pdx.edu/')
+        ldap_connected = True
+        return ldap_obj, ldap_connected
+    except psuldap.ldap.LDAPError, err:
+        print '\nerror connecting to ldap: {0}\n'.format(err)
+        return None, False
+
+def ldap_search(ldap_obj, search_filter, ldap_searched, ldap_results):
+    '''a helper method to handle ldap searches in the context of this specific
+        app.'''
+    search_results = []
+    try:
+        search_results = ldap_obj.search( searchfilter=search_filter )
+        ldap_searched = True
+        if len( search_results ) > 0:
+            ldap_results.append( search_results )
+    except psuldap.ldap.FILTER_ERROR, err:
+        print '\nerror searching ldap\n {0}\n'.format(err)
+    return ldap_searched, ldap_results, search_results
+
 def ldap_lookup( website ):
     '''helper method for handling the ldap lookup'''
     ldap_connected = False
     ldap_searched = False
     search_results = []
     ldap_results = []
-
-    try:
-        ldap_obj = psuldap.psuldap()
-        ldap_obj.connect(ldapurl='ldap://ldap.oit.pdx.edu/')
-        ldap_connected = True
-    except:
-        print '\nerror connecting to ldap\n'
+    
+    ldap_obj, ldap_connected = ldap_connect()
 
     if ldap_connected:
+
         this_search_filter = '(&(eduPersonAffiliation=WEB)(labeledUri=*' + \
             str( website ) + '*))'
-        try:
-            search_results = ldap_obj.search( searchfilter=this_search_filter )
-            ldap_searched = True
-            if len( search_results ) > 0:
-                ldap_results.append( search_results )
-        except:
-            print '\nerror searching ldap\n' + str( exc_info()[1] ) + '\n'
+        ldap_searched, ldap_results, search_results = ldap_search(
+            ldap_obj, this_search_filter, ldap_searched, ldap_results)
 
         if len( search_results ) is 0:
             this_search_filter = '(&(eduPersonAffiliation=WEB)(cn=*' + \
@@ -258,8 +249,8 @@ def ldap_lookup( website ):
                 ldap_searched = True
                 if len( search_results ) > 0:
                     ldap_results.append( search_results )
-            except:
-                print '\nerror searching ldap\n' + str( exc_info()[1] ) + '\n'
+            except psuldap.ldap.FILTER_ERROR, err:
+                print '\nerror searching ldap\n{0}\n'.format(err)
 
         if len( search_results ) is 0:
             this_search_filter = '(&(eduPersonAffiliation=WEB)(gecos=*' + \
@@ -270,8 +261,8 @@ def ldap_lookup( website ):
                 ldap_searched = True
                 if len( search_results ) > 0:
                     ldap_results.append( search_results )
-            except:
-                print '\nerror searching ldap\n' + str( exc_info()[1] ) + '\n'
+            except psuldap.ldap.FILTER_ERROR, err:
+                print '\nerror searching ldap\n{0}\n'.format(err)
 
     #ldap searched will always be true provided there was no error
     if ldap_searched:
@@ -285,25 +276,25 @@ def ldap_lookup( website ):
     return uid, search_results
 
 if __name__ == '__main__':
-    '''the main method for when the function is called from the command line'''
-    input_entered = False
+    __input_entered__ = False
 
     try:
-        parser = argparse.ArgumentParser( description = \
+        __parser__ = argparse.ArgumentParser(description = \
             ('this script takes a website as input and finds the ip ' + \
             'address, indicating DNS records; checks in puppet for any ' + \
             'puppet records containing the file; and an ldap lookup to see ' + \
-            'if there\'s a uid for the website') )
-        parser.add_argument( 'website', action='store', nargs = '*' )
-        args = parser.parse_args()
-        for site in args.website:
-            if not input_entered:
-                input_entered = True
-            print '\n' + str( get_website( site ) )
+            'if there\'s a uid for the website'))
+        __parser__.add_argument('website', action='store', nargs = '*')
+        __args__ = __parser__.parse_args()
+        for site in __args__.website:
+            #if there are any args, input_entered is set to true
+            if not __input_entered__:
+                __input_entered__ = True
+            print '\n' + str(get_website(site))
 
-    except:
-        print 'error: ' + str( exc_info()[1] )
+    except Exception, err:
+        print 'error: {0}'.format(err)
         print get_website('')
 
-    if not input_entered:
+    if not __input_entered__:
         print get_website('')
